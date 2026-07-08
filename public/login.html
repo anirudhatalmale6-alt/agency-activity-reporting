@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Admin Login</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <span class="dot"></span>
+    <h1>Admin Login</h1>
+    <nav><a href="/">Submit</a></nav>
+  </header>
+  <main class="wrap" style="max-width:420px">
+    <div id="msg" class="msg"></div>
+    <form id="loginForm" class="card">
+      <div class="field">
+        <label class="lbl">Username</label>
+        <input type="text" name="username" autocomplete="username" required />
+      </div>
+      <div class="field">
+        <label class="lbl">Password</label>
+        <input type="password" name="password" autocomplete="current-password" required />
+      </div>
+      <button class="btn btn-primary" type="submit">Log in</button>
+    </form>
+    <p class="intro">Every action you take in the admin area is logged with your user ID and a timestamp.</p>
+  </main>
+  <script>
+    const f = document.getElementById('loginForm');
+    const msg = document.getElementById('msg');
+    f.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const res = await fetch('/api/login', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: f.username.value, password: f.password.value }),
+      });
+      const d = await res.json();
+      if (!res.ok) { msg.className = 'msg show error'; msg.textContent = d.error || 'Login failed.'; return; }
+      location.href = '/admin.html';
+    });
+  </script>
+</body>
+</html>

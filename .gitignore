@@ -10,3 +10,9 @@ shot.py
 install.log
 shot_*.jpg
 test_*.jpg
+.pgdata/
+.env.local
+cookies.txt
+shot2.py
+test_vid.mp4
+*.env

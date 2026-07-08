@@ -102,3 +102,6 @@ textarea { min-height: 84px; resize: vertical; }
 .msg.error { background: rgba(255,93,93,.14); border: 1px solid var(--danger); color: #ffc2c2; }
 
 .req { color: var(--accent); }
+
+.progress { margin-top: 10px; height: 8px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+.progress-bar { height: 100%; width: 0; background: linear-gradient(90deg, var(--accent-2), var(--accent)); transition: width .2s; }

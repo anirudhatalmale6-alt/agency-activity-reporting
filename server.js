@@ -1,180 +1,288 @@
 const express = require('express');
-const multer = require('multer');
-const exifr = require('exifr');
+const session = require('express-session');
+const pgSession = require('connect-pg-simple')(session);
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
-const db = require('./db');
+const { v4: uuidv4 } = require('uuid');
+
+const { pool, init } = require('./db');
+const audit = require('./lib/audit');
+const media = require('./lib/media');
+const { seedFirstAdmin, verifyLogin, requireAuth, requireRole } = require('./lib/auth');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
 const UPLOAD_DIR = path.join(__dirname, 'uploads');
+const TMP_DIR = path.join(__dirname, 'uploads', '.tmp');
 fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+fs.mkdirSync(TMP_DIR, { recursive: true });
 
+app.set('trust proxy', 1);
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+app.use(session({
+  store: new pgSession({ pool, tableName: 'user_sessions', createTableIfMissing: true }),
+  secret: process.env.SESSION_SECRET || 'dev-secret-change-me',
+  resave: false,
+  saveUninitialized: false,
+  cookie: { httpOnly: true, sameSite: 'lax', maxAge: 8 * 60 * 60 * 1000 },
+}));
+
 app.use(express.static(path.join(__dirname, 'public')));
 app.use('/uploads', express.static(UPLOAD_DIR));
-
-// Store the raw upload untouched so ALL original metadata is preserved (AC 1a).
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, UPLOAD_DIR),
-  filename: (req, file, cb) => {
-    const ext = path.extname(file.originalname);
-    cb(null, `${Date.now()}-${crypto.randomBytes(6).toString('hex')}${ext}`);
-  },
-});
-const upload = multer({
-  storage,
-  limits: { fileSize: 200 * 1024 * 1024 }, // 200MB placeholder, tune to hosting
-});
-
-// Pull GPS + full technical metadata out of an uploaded photo/video.
-async function extractMetadata(filePath, mime) {
-  const result = { gps: null, exif: null };
-  try {
-    if (mime && mime.startsWith('image/')) {
-      const full = await exifr.parse(filePath, { gps: true, translateValues: true });
-      if (full) {
-        result.exif = full;
-        if (typeof full.latitude === 'number' && typeof full.longitude === 'number') {
-          result.gps = { lat: full.latitude, lng: full.longitude };
-        }
-      }
-    }
-    // NOTE: video GPS (QuickTime/MP4 location atom) can be added with a
-    // dedicated parser once we confirm the video formats in use.
-  } catch (e) {
-    // A file with no readable metadata is fine - we just store what we have.
-  }
-  return result;
-}
 
 const EQUIPMENT_OPTIONS = [
   'Flexicuffs', 'Dogs', 'Batons', 'LRAD sound cannon',
   'Armored vehicles', 'Firearms', 'Tear gas / chemical agents', 'Drones',
 ];
+const MAX_FILE_BYTES = 3 * 1024 * 1024 * 1024; // 3GB ceiling (covers 15-min video)
 
-// --- Submit a report -------------------------------------------------------
-app.post('/api/reports', upload.single('media'), async (req, res) => {
+// In-flight chunked uploads: uploadId -> { tmpPath, filename, mime, received, done, fileInfo }
+const uploads = new Map();
+
+// ===================== AUTH =====================
+app.post('/api/login', async (req, res) => {
+  const { username, password } = req.body;
+  const admin = await verifyLogin(username || '', password || '');
+  if (!admin) {
+    await audit.record({ req, action: 'login_failed', entityType: 'admin', changes: { username } });
+    return res.status(401).json({ error: 'Invalid username or password.' });
+  }
+  req.session.admin = admin;
+  await audit.record({ req, action: 'login', entityType: 'admin', entityId: admin.id });
+  res.json({ ok: true, admin });
+});
+
+app.post('/api/logout', requireAuth, async (req, res) => {
+  await audit.record({ req, action: 'logout', entityType: 'admin', entityId: req.session.admin.id });
+  req.session.destroy(() => res.json({ ok: true }));
+});
+
+app.get('/api/me', (req, res) => {
+  res.json({ admin: (req.session && req.session.admin) || null });
+});
+
+// ===================== CHUNKED UPLOAD (public) =====================
+// Robust for 15-min videos on flaky mobile connections.
+app.post('/api/uploads/init', (req, res) => {
+  const { filename, mime, size } = req.body;
+  if (size && size > MAX_FILE_BYTES) {
+    return res.status(413).json({ error: 'File exceeds the maximum allowed size.' });
+  }
+  const uploadId = uuidv4();
+  const tmpPath = path.join(TMP_DIR, uploadId);
+  fs.writeFileSync(tmpPath, Buffer.alloc(0));
+  uploads.set(uploadId, { tmpPath, filename: filename || 'upload', mime: mime || 'application/octet-stream', received: 0, done: false });
+  res.json({ uploadId, chunkSize: 5 * 1024 * 1024 });
+});
+
+app.post('/api/uploads/:id/chunk', express.raw({ type: '*/*', limit: '20mb' }), (req, res) => {
+  const u = uploads.get(req.params.id);
+  if (!u || u.done) return res.status(404).json({ error: 'Unknown upload session.' });
+  u.received += req.body.length;
+  if (u.received > MAX_FILE_BYTES) {
+    uploads.delete(req.params.id);
+    try { fs.unlinkSync(u.tmpPath); } catch {}
+    return res.status(413).json({ error: 'File exceeds the maximum allowed size.' });
+  }
+  fs.appendFileSync(u.tmpPath, req.body);
+  res.json({ ok: true, received: u.received });
+});
+
+app.post('/api/uploads/:id/complete', async (req, res) => {
+  const u = uploads.get(req.params.id);
+  if (!u) return res.status(404).json({ error: 'Unknown upload session.' });
+  try {
+    const ext = path.extname(u.filename);
+    const finalName = `${Date.now()}-${crypto.randomBytes(6).toString('hex')}${ext}`;
+    const finalPath = path.join(UPLOAD_DIR, finalName);
+    fs.renameSync(u.tmpPath, finalPath);
+    // Integrity hash + full metadata + best-effort GPS, computed once at ingest.
+    const info = await media.inspectMedia(finalPath, u.mime);
+    // Make the stored original read-only (write-once evidence).
+    try { fs.chmodSync(finalPath, 0o444); } catch {}
+    u.done = true;
+    u.fileInfo = {
+      file_name: finalName,
+      file_original: u.filename,
+      file_mime: u.mime,
+      file_size_bytes: fs.statSync(finalPath).size,
+      file_sha256: info.sha256,
+      media_metadata: info.metadata,
+      gps: info.gps,
+      location_source: info.source,
+    };
+    res.json({ ok: true, sha256: info.sha256, geolocated: !!info.gps });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Could not finalize upload.' });
+  }
+});
+
+// ===================== SUBMIT REPORT (public) =====================
+app.post('/api/reports', async (req, res) => {
   try {
     const b = req.body;
-
-    if (b.terms_accepted !== 'true' && b.terms_accepted !== 'on' && b.terms_accepted !== '1') {
+    if (b.terms_accepted !== true && b.terms_accepted !== 'true') {
       return res.status(400).json({ error: 'You must read and accept the terms and conditions.' });
     }
 
-    // Equipment: checkbox array + optional free text.
     let equipment = [];
-    if (Array.isArray(b.equipment)) equipment = b.equipment;
+    if (Array.isArray(b.equipment)) equipment = b.equipment.slice();
     else if (typeof b.equipment === 'string' && b.equipment) equipment = [b.equipment];
-    if (b.equipment_other && b.equipment_other.trim()) equipment.push(b.equipment_other.trim());
+    if (b.equipment_other && String(b.equipment_other).trim()) equipment.push(String(b.equipment_other).trim());
 
+    // Media (optional) comes from a completed chunked upload.
+    let fi = null;
+    if (b.uploadId) {
+      const u = uploads.get(b.uploadId);
+      if (u && u.done && u.fileInfo) { fi = u.fileInfo; uploads.delete(b.uploadId); }
+    }
+
+    // Location priority: media GPS -> device GPS -> manual.
     let lat = null, lng = null, source = null;
-    let metadata = null;
+    if (fi && fi.gps) { lat = fi.gps.lat; lng = fi.gps.lng; source = fi.location_source; }
+    if (lat == null && b.device_lat && b.device_lng) { lat = parseFloat(b.device_lat); lng = parseFloat(b.device_lng); source = 'device_gps'; }
+    if (lat == null && b.manual_lat && b.manual_lng) { lat = parseFloat(b.manual_lat); lng = parseFloat(b.manual_lng); source = 'manual'; }
 
-    if (req.file) {
-      const meta = await extractMetadata(req.file.path, req.file.mimetype);
-      metadata = JSON.stringify(meta.exif || {});
-      if (meta.gps) { lat = meta.gps.lat; lng = meta.gps.lng; source = 'photo_exif'; }
-    }
-
-    // Fall back to device GPS captured in the browser, then manual entry.
-    if (lat == null && b.device_lat && b.device_lng) {
-      lat = parseFloat(b.device_lat); lng = parseFloat(b.device_lng); source = 'device_gps';
-    }
-    if (lat == null && b.manual_lat && b.manual_lng) {
-      lat = parseFloat(b.manual_lat); lng = parseFloat(b.manual_lng); source = 'manual';
-    }
-
-    const now = new Date().toISOString();
-    const stmt = db.prepare(`
-      INSERT INTO reports (
-        created_at, size, activity, location_text, unit, observed_at, equipment,
+    const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress || null;
+    const { rows } = await pool.query(
+      `INSERT INTO reports (
+        size, activity, location_text, unit, observed_at, equipment,
         latitude, longitude, location_source,
-        file_name, file_original, file_mime, file_size_bytes, media_metadata,
-        terms_accepted, terms_accepted_at, status
+        file_name, file_original, file_mime, file_size_bytes, file_sha256, media_metadata,
+        submitter_ip, submitter_agent, terms_accepted, terms_accepted_at, status
       ) VALUES (
-        @created_at, @size, @activity, @location_text, @unit, @observed_at, @equipment,
-        @latitude, @longitude, @location_source,
-        @file_name, @file_original, @file_mime, @file_size_bytes, @media_metadata,
-        1, @terms_accepted_at, 'pending'
-      )
-    `);
-    const info = stmt.run({
-      created_at: now,
-      size: b.size || null,
-      activity: b.activity || null,
-      location_text: b.location_text || null,
-      unit: b.unit || null,
-      observed_at: b.observed_at || null,
-      equipment: equipment.join(', ') || null,
-      latitude: lat,
-      longitude: lng,
-      location_source: source,
-      file_name: req.file ? req.file.filename : null,
-      file_original: req.file ? req.file.originalname : null,
-      file_mime: req.file ? req.file.mimetype : null,
-      file_size_bytes: req.file ? req.file.size : null,
-      media_metadata: metadata,
-      terms_accepted_at: now,
-    });
-
-    res.json({ ok: true, id: info.lastInsertRowid, geolocated: lat != null });
+        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,TRUE,now(),'pending'
+      ) RETURNING id`,
+      [
+        b.size || null, b.activity || null, b.location_text || null, b.unit || null,
+        b.observed_at || null, equipment.join(', ') || null,
+        lat, lng, source,
+        fi ? fi.file_name : null, fi ? fi.file_original : null, fi ? fi.file_mime : null,
+        fi ? fi.file_size_bytes : null, fi ? fi.file_sha256 : null,
+        fi ? JSON.stringify(fi.media_metadata || {}) : null,
+        ip, req.headers['user-agent'] || null,
+      ]
+    );
+    res.json({ ok: true, id: rows[0].id, geolocated: lat != null });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Something went wrong saving your report.' });
   }
 });
 
-// --- Admin: list reports ---------------------------------------------------
-app.get('/api/reports', (req, res) => {
-  const rows = db.prepare('SELECT * FROM reports ORDER BY created_at DESC').all();
+app.get('/api/equipment-options', (req, res) => res.json(EQUIPMENT_OPTIONS));
+
+// ===================== ADMIN (protected + audited) =====================
+app.get('/api/reports', requireAuth, async (req, res) => {
+  const { rows } = await pool.query('SELECT * FROM reports ORDER BY created_at DESC');
+  await audit.record({ req, action: 'view', entityType: 'report', changes: { count: rows.length } });
   res.json(rows);
 });
 
-// --- Admin: moderate -------------------------------------------------------
-app.post('/api/reports/:id/status', (req, res) => {
+app.post('/api/reports/:id/status', requireAuth, async (req, res) => {
   const { status } = req.body;
   if (!['pending', 'approved', 'rejected'].includes(status)) {
     return res.status(400).json({ error: 'Invalid status' });
   }
-  db.prepare('UPDATE reports SET status = ? WHERE id = ?').run(status, req.params.id);
+  const cur = await pool.query('SELECT status FROM reports WHERE id = $1', [req.params.id]);
+  if (!cur.rows.length) return res.status(404).json({ error: 'Report not found.' });
+  const before = cur.rows[0].status;
+  await pool.query(
+    'UPDATE reports SET status = $1, reviewed_by = $2, reviewed_at = now() WHERE id = $3',
+    [status, req.session.admin.id, req.params.id]
+  );
+  await audit.record({
+    req, action: status === 'approved' ? 'approve' : status === 'rejected' ? 'reject' : 'edit',
+    entityType: 'report', entityId: req.params.id, changes: { status: { from: before, to: status } },
+  });
   res.json({ ok: true });
 });
 
-// --- Admin: CSV export (Access / Power BI ready, AC 2b) ---------------------
-app.get('/api/export.csv', (req, res) => {
-  const rows = db.prepare('SELECT * FROM reports ORDER BY id').all();
-  const cols = [
-    'id', 'created_at', 'size', 'activity', 'location_text', 'unit', 'observed_at',
-    'equipment', 'latitude', 'longitude', 'location_source', 'file_original',
-    'file_mime', 'file_size_bytes', 'terms_accepted', 'status',
-  ];
-  const esc = (v) => {
-    if (v == null) return '';
-    const s = String(v).replace(/"/g, '""');
-    return /[",\n]/.test(s) ? `"${s}"` : s;
-  };
-  const csv = [cols.join(',')]
-    .concat(rows.map((r) => cols.map((c) => esc(r[c])).join(',')))
-    .join('\n');
+// Edit report text fields (audited with before/after per field).
+app.patch('/api/reports/:id', requireAuth, async (req, res) => {
+  const editable = ['size', 'activity', 'location_text', 'unit', 'equipment'];
+  const cur = await pool.query('SELECT * FROM reports WHERE id = $1', [req.params.id]);
+  if (!cur.rows.length) return res.status(404).json({ error: 'Report not found.' });
+  const before = cur.rows[0];
+  const sets = [], vals = [], changes = {};
+  let i = 1;
+  for (const f of editable) {
+    if (f in req.body && req.body[f] !== before[f]) {
+      sets.push(`${f} = $${i++}`); vals.push(req.body[f]);
+      changes[f] = { from: before[f], to: req.body[f] };
+    }
+  }
+  if (!sets.length) return res.json({ ok: true, unchanged: true });
+  vals.push(req.params.id);
+  await pool.query(`UPDATE reports SET ${sets.join(', ')} WHERE id = $${i}`, vals);
+  await audit.record({ req, action: 'edit', entityType: 'report', entityId: req.params.id, changes });
+  res.json({ ok: true, changes });
+});
+
+app.get('/api/audit', requireAuth, async (req, res) => {
+  const { rows } = await pool.query('SELECT * FROM audit_log ORDER BY at DESC LIMIT 500');
+  res.json(rows);
+});
+
+// Admin user management (admin role only).
+app.get('/api/admins', requireAuth, requireRole('admin'), async (req, res) => {
+  const { rows } = await pool.query('SELECT id, username, display_name, role, active, created_at FROM admins ORDER BY created_at');
+  res.json(rows);
+});
+app.post('/api/admins', requireAuth, requireRole('admin'), async (req, res) => {
+  const bcrypt = require('bcryptjs');
+  const { username, display_name, password, role } = req.body;
+  if (!username || !password || !display_name) return res.status(400).json({ error: 'username, display_name and password are required.' });
+  const hash = await bcrypt.hash(password, 12);
+  try {
+    const { rows } = await pool.query(
+      `INSERT INTO admins (username, display_name, password_hash, role) VALUES ($1,$2,$3,$4) RETURNING id`,
+      [username, display_name, hash, role === 'admin' ? 'admin' : 'reviewer']
+    );
+    await audit.record({ req, action: 'create_admin', entityType: 'admin', entityId: rows[0].id, changes: { username, role } });
+    res.json({ ok: true, id: rows[0].id });
+  } catch (e) {
+    res.status(400).json({ error: 'Username already exists.' });
+  }
+});
+
+// CSV export (Access / Power BI ready) - audited.
+app.get('/api/export.csv', requireAuth, async (req, res) => {
+  const { rows } = await pool.query('SELECT * FROM reports ORDER BY id');
+  const cols = ['id', 'created_at', 'size', 'activity', 'location_text', 'unit', 'observed_at',
+    'equipment', 'latitude', 'longitude', 'location_source', 'file_original', 'file_mime',
+    'file_size_bytes', 'file_sha256', 'status', 'reviewed_at'];
+  const esc = (v) => { if (v == null) return ''; const s = String(v).replace(/"/g, '""'); return /[",\n]/.test(s) ? `"${s}"` : s; };
+  const csv = [cols.join(',')].concat(rows.map((r) => cols.map((c) => esc(r[c])).join(','))).join('\n');
+  await audit.record({ req, action: 'export', entityType: 'report', changes: { format: 'csv', count: rows.length } });
   res.setHeader('Content-Type', 'text/csv');
   res.setHeader('Content-Disposition', 'attachment; filename="agency_reports.csv"');
   res.send(csv);
 });
 
-// --- Heat map data (approved reports with coordinates) ----------------------
-app.get('/api/heatmap.json', (req, res) => {
-  const rows = db.prepare(`
-    SELECT latitude, longitude, activity, unit, observed_at
-    FROM reports
-    WHERE status = 'approved' AND latitude IS NOT NULL AND longitude IS NOT NULL
-  `).all();
+// ===================== HEAT MAP (public, approved only) =====================
+app.get('/api/heatmap.json', async (req, res) => {
+  const { rows } = await pool.query(
+    `SELECT latitude, longitude, activity, unit, observed_at FROM reports
+     WHERE status = 'approved' AND latitude IS NOT NULL AND longitude IS NOT NULL`
+  );
   res.json(rows);
 });
 
-app.get('/api/equipment-options', (req, res) => res.json(EQUIPMENT_OPTIONS));
-
-app.listen(PORT, () => console.log(`Server running on http://localhost:${PORT}`));
+// ===================== START =====================
+(async () => {
+  await init();
+  // A read-only view Power BI connects to (approved reports for public display).
+  await pool.query(`
+    CREATE OR REPLACE VIEW powerbi_heatmap AS
+      SELECT id, created_at, activity, unit, equipment, observed_at,
+             latitude, longitude, location_text, status
+      FROM reports WHERE status = 'approved' AND latitude IS NOT NULL;
+  `);
+  await seedFirstAdmin();
+  app.listen(PORT, () => console.log(`Server running on http://localhost:${PORT}`));
+})();

@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Heat Map (Power BI)</title>
+  <link rel="stylesheet" href="/styles.css" />
+  <style>
+    .embed { border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: var(--panel-2); }
+    .embed iframe { width: 100%; height: calc(100vh - 180px); border: 0; display: block; }
+    .placeholder { padding: 40px 24px; text-align: center; color: var(--muted); }
+    .placeholder h2 { color: var(--text); }
+    .note { font-size: 13px; }
+    code { background: var(--panel-2); padding: 2px 6px; border-radius: 5px; color: var(--accent); }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <span class="dot"></span>
+    <h1>Activity Heat Map (Power BI)</h1>
+    <nav>
+      <a href="/">Submit</a>
+      <a href="/heatmap.html">Native map</a>
+      <a href="/admin.html">Admin</a>
+    </nav>
+  </header>
+  <main class="wrap" style="max-width:1100px">
+    <div class="embed" id="embed">
+      <!--
+        Paste your Power BI "Publish to web" embed code here to go live.
+        Replace the placeholder block below with the <iframe> Power BI gives you:
+        <iframe title="Heat Map" src="https://app.powerbi.com/view?r=YOUR_EMBED_TOKEN"></iframe>
+      -->
+      <div class="placeholder">
+        <h2>Power BI embed slot</h2>
+        <p class="note">This page is wired and ready. Once you publish your Power BI heat-map report
+          via <b>Publish to web</b>, paste the iframe into <code>public/powerbi.html</code> and it appears here.</p>
+        <p class="note">Power BI reads live report data from the <code>powerbi_heatmap</code> database view
+          (approved, geolocated reports) &mdash; setup steps are in <code>POWERBI_SETUP.md</code>.</p>
+        <p class="note">Prefer no Power BI cost? The <a href="/heatmap.html">built-in native heat map</a> is fully working now.</p>
+      </div>
+    </div>
+  </main>
+</body>
+</html>

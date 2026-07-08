@@ -8,6 +8,9 @@
   <style>
     .toolbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 14px; }
     .toolbar .spacer { flex: 1; }
+    .tabs { display: flex; gap: 6px; margin-bottom: 14px; }
+    .tab { padding: 8px 14px; border-radius: 9px; border: 1px solid var(--line); background: var(--panel-2); color: var(--muted); cursor: pointer; font-size: 14px; }
+    .tab.active { color: var(--text); border-color: var(--accent-2); }
     .tablewrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 12px; }
     table { border-collapse: collapse; width: 100%; font-size: 13px; min-width: 1100px; }
     th, td { text-align: left; padding: 9px 11px; border-bottom: 1px solid var(--line); vertical-align: top; }
@@ -21,100 +24,167 @@
     .miniact button { font-size: 11px; padding: 4px 8px; border-radius: 7px; border: 1px solid var(--line); background: var(--panel-2); color: var(--text); cursor: pointer; }
     .miniact button:hover { border-color: var(--accent-2); }
     a.medialink { color: var(--accent-2); }
-    .metacell { max-width: 260px; }
-    .metacell code { font-size: 11px; color: var(--muted); word-break: break-all; }
-    .wrap { max-width: 1200px; }
+    .hash { font-family: monospace; font-size: 10.5px; color: var(--muted); word-break: break-all; max-width: 150px; display: inline-block; }
+    .wrap { max-width: 1240px; }
     .stat { color: var(--muted); font-size: 13px; }
+    code { font-size: 11px; color: var(--muted); }
+    .page { display: none; } .page.active { display: block; }
   </style>
 </head>
 <body>
   <header class="topbar">
     <span class="dot"></span>
-    <h1>Admin &mdash; Consolidated Reports</h1>
+    <h1>Admin Console</h1>
     <nav>
       <a href="/">Submit</a>
       <a href="/heatmap.html">Heat Map</a>
+      <span id="who" class="stat"></span>
+      <a href="#" id="logout">Log out</a>
     </nav>
   </header>
 
   <main class="wrap">
-    <div class="toolbar">
-      <span class="stat" id="stat">Loading…</span>
-      <span class="spacer"></span>
-      <a class="btn btn-ghost" href="/api/export.csv">Export CSV (Access / Power BI)</a>
+    <div class="tabs">
+      <div class="tab active" data-page="reports">Reports</div>
+      <div class="tab" data-page="audit">Audit Log</div>
+      <div class="tab" data-page="admins" id="adminsTab" style="display:none">Reviewers</div>
     </div>
-    <div class="tablewrap">
-      <table>
-        <thead>
-          <tr>
+
+    <!-- REPORTS -->
+    <section class="page active" id="page-reports">
+      <div class="toolbar">
+        <span class="stat" id="stat">Loading…</span>
+        <span class="spacer"></span>
+        <a class="btn btn-ghost" href="/api/export.csv">Export CSV (Access / Power BI)</a>
+      </div>
+      <div class="tablewrap">
+        <table>
+          <thead><tr>
             <th>ID</th><th>Submitted</th><th>Size</th><th>Activity</th><th>Location</th>
             <th>Unit</th><th>Observed</th><th>Equipment</th><th>Coords</th><th>Src</th>
-            <th>Media</th><th>Metadata</th><th>Status</th><th>Actions</th>
-          </tr>
-        </thead>
-        <tbody id="rows"></tbody>
-      </table>
-    </div>
+            <th>Media</th><th>SHA-256</th><th>Status</th><th>Reviewed by</th><th>Actions</th>
+          </tr></thead>
+          <tbody id="rows"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- AUDIT -->
+    <section class="page" id="page-audit">
+      <div class="toolbar"><span class="stat">Immutable evidence trail &mdash; every admin action, newest first.</span></div>
+      <div class="tablewrap">
+        <table style="min-width:800px">
+          <thead><tr><th>When (UTC)</th><th>User</th><th>Action</th><th>Entity</th><th>Details</th><th>IP</th></tr></thead>
+          <tbody id="auditRows"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ADMINS -->
+    <section class="page" id="page-admins">
+      <div class="card" style="max-width:520px">
+        <h3 style="margin-top:0">Add reviewer</h3>
+        <div class="field"><label class="lbl">Username</label><input type="text" id="na_user" /></div>
+        <div class="field"><label class="lbl">Display name</label><input type="text" id="na_name" /></div>
+        <div class="field"><label class="lbl">Password</label><input type="text" id="na_pass" /></div>
+        <div class="field"><label class="lbl">Role</label>
+          <select id="na_role" style="width:100%;padding:11px;border-radius:10px;background:var(--panel-2);color:var(--text);border:1px solid var(--line)">
+            <option value="reviewer">Reviewer</option><option value="admin">Admin</option>
+          </select>
+        </div>
+        <button class="btn btn-primary" id="addAdmin">Add reviewer</button>
+        <p id="na_msg" class="stat"></p>
+      </div>
+      <div class="tablewrap" style="margin-top:16px">
+        <table style="min-width:600px">
+          <thead><tr><th>Username</th><th>Name</th><th>Role</th><th>Active</th><th>Created</th></tr></thead>
+          <tbody id="adminRows"></tbody>
+        </table>
+      </div>
+    </section>
   </main>
 
   <script>
-    const rowsEl = document.getElementById('rows');
-    const statEl = document.getElementById('stat');
-
-    function coord(r) {
-      return (r.latitude != null && r.longitude != null)
-        ? `${r.latitude.toFixed(4)}, ${r.longitude.toFixed(4)}` : '—';
-    }
-    function media(r) {
-      if (!r.file_name) return '—';
-      return `<a class="medialink" href="/uploads/${r.file_name}" target="_blank">${r.file_original || 'file'}</a>`;
-    }
-    function metaCell(r) {
-      if (!r.media_metadata || r.media_metadata === '{}') return '<span style="color:var(--muted)">none</span>';
-      try {
-        const m = JSON.parse(r.media_metadata);
-        const keys = Object.keys(m).slice(0, 4).map(k => `${k}: ${m[k]}`).join('  ·  ');
-        return `<div class="metacell"><code>${keys || 'stored'}</code></div>`;
-      } catch { return 'stored'; }
+    let me = null;
+    async function guard() {
+      me = (await (await fetch('/api/me')).json()).admin;
+      if (!me) { location.href = '/login.html'; return false; }
+      document.getElementById('who').textContent = `${me.display_name} (${me.role})`;
+      if (me.role === 'admin') document.getElementById('adminsTab').style.display = '';
+      return true;
     }
 
-    async function load() {
+    document.getElementById('logout').onclick = async (e) => {
+      e.preventDefault(); await fetch('/api/logout', { method: 'POST' }); location.href = '/login.html';
+    };
+
+    document.querySelectorAll('.tab').forEach(t => t.onclick = () => {
+      document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
+      document.querySelectorAll('.page').forEach(x => x.classList.remove('active'));
+      t.classList.add('active');
+      document.getElementById('page-' + t.dataset.page).classList.add('active');
+      if (t.dataset.page === 'audit') loadAudit();
+      if (t.dataset.page === 'admins') loadAdmins();
+    });
+
+    const coord = r => (r.latitude != null && r.longitude != null) ? `${(+r.latitude).toFixed(4)}, ${(+r.longitude).toFixed(4)}` : '—';
+    const mediaCell = r => r.file_name ? `<a class="medialink" href="/uploads/${r.file_name}" target="_blank">${r.file_original || 'file'}</a>` : '—';
+
+    async function loadReports() {
       const rows = await (await fetch('/api/reports')).json();
-      statEl.textContent = `${rows.length} report(s) · ${rows.filter(r => r.status === 'approved').length} approved · ${rows.filter(r => r.status === 'pending').length} pending`;
-      rowsEl.innerHTML = rows.map(r => `
+      document.getElementById('stat').textContent =
+        `${rows.length} report(s) · ${rows.filter(r => r.status === 'approved').length} approved · ${rows.filter(r => r.status === 'pending').length} pending`;
+      document.getElementById('rows').innerHTML = rows.map(r => `
         <tr>
           <td>${r.id}</td>
           <td>${new Date(r.created_at).toLocaleString()}</td>
-          <td>${r.size || '—'}</td>
-          <td>${r.activity || '—'}</td>
-          <td>${r.location_text || '—'}</td>
-          <td>${r.unit || '—'}</td>
-          <td>${r.observed_at ? new Date(r.observed_at).toLocaleString() : '—'}</td>
-          <td>${r.equipment || '—'}</td>
-          <td>${coord(r)}</td>
-          <td>${r.location_source || '—'}</td>
-          <td>${media(r)}</td>
-          <td>${metaCell(r)}</td>
+          <td>${r.size || '—'}</td><td>${r.activity || '—'}</td><td>${r.location_text || '—'}</td>
+          <td>${r.unit || '—'}</td><td>${r.observed_at ? new Date(r.observed_at).toLocaleString() : '—'}</td>
+          <td>${r.equipment || '—'}</td><td>${coord(r)}</td><td>${r.location_source || '—'}</td>
+          <td>${mediaCell(r)}</td>
+          <td>${r.file_sha256 ? `<span class="hash" title="${r.file_sha256}">${r.file_sha256.slice(0,16)}…</span>` : '—'}</td>
           <td><span class="pill ${r.status}">${r.status}</span></td>
-          <td>
-            <div class="miniact">
-              <button onclick="setStatus(${r.id},'approved')">Approve</button>
-              <button onclick="setStatus(${r.id},'rejected')">Reject</button>
-            </div>
-          </td>
-        </tr>`).join('') || '<tr><td colspan="14" style="text-align:center;color:var(--muted)">No reports yet.</td></tr>';
+          <td>${r.reviewed_at ? new Date(r.reviewed_at).toLocaleString() : '—'}</td>
+          <td><div class="miniact">
+            <button onclick="setStatus(${r.id},'approved')">Approve</button>
+            <button onclick="setStatus(${r.id},'rejected')">Reject</button>
+          </div></td>
+        </tr>`).join('') || '<tr><td colspan="15" style="text-align:center;color:var(--muted)">No reports yet.</td></tr>';
     }
-
     async function setStatus(id, status) {
-      await fetch(`/api/reports/${id}/status`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status }),
-      });
-      load();
+      await fetch(`/api/reports/${id}/status`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status }) });
+      loadReports();
     }
     window.setStatus = setStatus;
-    load();
+
+    async function loadAudit() {
+      const rows = await (await fetch('/api/audit')).json();
+      document.getElementById('auditRows').innerHTML = rows.map(a => `
+        <tr>
+          <td>${new Date(a.at).toISOString().replace('T',' ').slice(0,19)}</td>
+          <td>${a.admin_username || '—'}</td>
+          <td><b>${a.action}</b></td>
+          <td>${a.entity_type || ''}${a.entity_id ? ' #' + a.entity_id : ''}</td>
+          <td><code>${a.changes ? JSON.stringify(a.changes) : ''}</code></td>
+          <td>${a.ip || '—'}</td>
+        </tr>`).join('') || '<tr><td colspan="6" style="text-align:center;color:var(--muted)">No activity yet.</td></tr>';
+    }
+
+    async function loadAdmins() {
+      const rows = await (await fetch('/api/admins')).json();
+      document.getElementById('adminRows').innerHTML = rows.map(a => `
+        <tr><td>${a.username}</td><td>${a.display_name}</td><td>${a.role}</td>
+        <td>${a.active ? 'yes' : 'no'}</td><td>${new Date(a.created_at).toLocaleDateString()}</td></tr>`).join('');
+    }
+    document.getElementById('addAdmin').onclick = async () => {
+      const body = { username: na_user.value, display_name: na_name.value, password: na_pass.value, role: na_role.value };
+      const res = await fetch('/api/admins', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      const d = await res.json();
+      document.getElementById('na_msg').textContent = res.ok ? 'Reviewer added.' : (d.error || 'Failed.');
+      if (res.ok) { na_user.value = na_name.value = na_pass.value = ''; loadAdmins(); }
+    };
+
+    (async () => { if (await guard()) loadReports(); })();
   </script>
 </body>
 </html>
