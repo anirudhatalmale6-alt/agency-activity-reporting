@@ -16,3 +16,5 @@ cookies.txt
 shot2.py
 test_vid.mp4
 *.env
+import_test.csv
+import_test.xlsx

@@ -55,8 +55,12 @@
       <div class="toolbar">
         <span class="stat" id="stat">Loading…</span>
         <span class="spacer"></span>
+        <label class="stat" style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="impApproved" /> import as approved</label>
+        <button class="btn btn-ghost" id="importBtn">Import CSV / Excel</button>
+        <input type="file" id="importFile" accept=".csv,.xlsx" hidden />
         <a class="btn btn-ghost" href="/api/export.csv">Export CSV (Access / Power BI)</a>
       </div>
+      <p id="importMsg" class="stat" style="margin:-6px 0 12px"></p>
       <div class="tablewrap">
         <table>
           <thead><tr>
@@ -182,6 +186,27 @@
       const d = await res.json();
       document.getElementById('na_msg').textContent = res.ok ? 'Reviewer added.' : (d.error || 'Failed.');
       if (res.ok) { na_user.value = na_name.value = na_pass.value = ''; loadAdmins(); }
+    };
+
+    // Bulk import CSV / Excel.
+    document.getElementById('importBtn').onclick = () => document.getElementById('importFile').click();
+    document.getElementById('importFile').onchange = async (e) => {
+      const file = e.target.files[0]; if (!file) return;
+      const fmt = file.name.toLowerCase().endsWith('.xlsx') ? 'xlsx' : 'csv';
+      const approved = document.getElementById('impApproved').checked ? '&status=approved' : '';
+      const im = document.getElementById('importMsg');
+      im.textContent = `Importing ${file.name}…`;
+      try {
+        const res = await fetch(`/api/import?format=${fmt}${approved}`, {
+          method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: file,
+        });
+        const d = await res.json();
+        im.textContent = res.ok
+          ? `Imported ${d.inserted} row(s)${d.skipped ? `, skipped ${d.skipped} empty` : ''}. Mapped columns: ${d.mappedColumns.join(', ') || 'none'}.`
+          : (d.error || 'Import failed.');
+        if (res.ok) loadReports();
+      } catch { im.textContent = 'Import failed.'; }
+      e.target.value = '';
     };
 
     (async () => { if (await guard()) loadReports(); })();

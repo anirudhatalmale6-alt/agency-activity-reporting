@@ -250,6 +250,39 @@ app.post('/api/admins', requireAuth, requireRole('admin'), async (req, res) => {
   }
 });
 
+// Bulk import from CSV / Excel (admin, audited). Original brief: file uploads (CSV, Excel).
+app.post('/api/import', requireAuth, express.raw({ type: '*/*', limit: '50mb' }), async (req, res) => {
+  const importer = require('./lib/importer');
+  const format = (req.query.format || 'csv').toLowerCase();
+  const markApproved = req.query.status === 'approved';
+  try {
+    const { records, skipped, headerMap } = await importer.parseImport(req.body, format);
+    if (!records.length) {
+      return res.status(400).json({ error: 'No valid rows found. Check the column headers.', headerMap });
+    }
+    const status = markApproved ? 'approved' : 'pending';
+    let inserted = 0;
+    for (const r of records) {
+      const src = (r.latitude != null && r.longitude != null) ? 'import' : null;
+      await pool.query(
+        `INSERT INTO reports (size, activity, location_text, unit, observed_at, equipment,
+          latitude, longitude, location_source, terms_accepted, status, reviewed_by, reviewed_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,TRUE,$10,$11,$12)`,
+        [r.size, r.activity, r.location_text, r.unit, r.observed_at, r.equipment,
+         r.latitude, r.longitude, src, status,
+         markApproved ? req.session.admin.id : null, markApproved ? new Date() : null]
+      );
+      inserted++;
+    }
+    await audit.record({ req, action: 'import', entityType: 'report',
+      changes: { format, inserted, skipped, markedApproved: markApproved, mappedColumns: Object.keys(headerMap) } });
+    res.json({ ok: true, inserted, skipped, mappedColumns: Object.keys(headerMap) });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Import failed. Make sure the file is a valid CSV or Excel file.' });
+  }
+});
+
 // CSV export (Access / Power BI ready) - audited.
 app.get('/api/export.csv', requireAuth, async (req, res) => {
   const { rows } = await pool.query('SELECT * FROM reports ORDER BY id');
