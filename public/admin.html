@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Admin &mdash; Consolidated Reports</title>
+  <link rel="stylesheet" href="/styles.css" />
+  <style>
+    .toolbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 14px; }
+    .toolbar .spacer { flex: 1; }
+    .tablewrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 12px; }
+    table { border-collapse: collapse; width: 100%; font-size: 13px; min-width: 1100px; }
+    th, td { text-align: left; padding: 9px 11px; border-bottom: 1px solid var(--line); vertical-align: top; }
+    th { background: var(--panel-2); position: sticky; top: 0; color: var(--muted); font-weight: 600; }
+    tr:hover td { background: rgba(78,161,255,.05); }
+    .pill { font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 20px; }
+    .pill.pending { background: rgba(255,176,32,.16); color: var(--accent); }
+    .pill.approved { background: rgba(56,193,114,.16); color: var(--ok); }
+    .pill.rejected { background: rgba(255,93,93,.16); color: var(--danger); }
+    .miniact { display: flex; gap: 6px; }
+    .miniact button { font-size: 11px; padding: 4px 8px; border-radius: 7px; border: 1px solid var(--line); background: var(--panel-2); color: var(--text); cursor: pointer; }
+    .miniact button:hover { border-color: var(--accent-2); }
+    a.medialink { color: var(--accent-2); }
+    .metacell { max-width: 260px; }
+    .metacell code { font-size: 11px; color: var(--muted); word-break: break-all; }
+    .wrap { max-width: 1200px; }
+    .stat { color: var(--muted); font-size: 13px; }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <span class="dot"></span>
+    <h1>Admin &mdash; Consolidated Reports</h1>
+    <nav>
+      <a href="/">Submit</a>
+      <a href="/heatmap.html">Heat Map</a>
+    </nav>
+  </header>
+
+  <main class="wrap">
+    <div class="toolbar">
+      <span class="stat" id="stat">Loading…</span>
+      <span class="spacer"></span>
+      <a class="btn btn-ghost" href="/api/export.csv">Export CSV (Access / Power BI)</a>
+    </div>
+    <div class="tablewrap">
+      <table>
+        <thead>
+          <tr>
+            <th>ID</th><th>Submitted</th><th>Size</th><th>Activity</th><th>Location</th>
+            <th>Unit</th><th>Observed</th><th>Equipment</th><th>Coords</th><th>Src</th>
+            <th>Media</th><th>Metadata</th><th>Status</th><th>Actions</th>
+          </tr>
+        </thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </div>
+  </main>
+
+  <script>
+    const rowsEl = document.getElementById('rows');
+    const statEl = document.getElementById('stat');
+
+    function coord(r) {
+      return (r.latitude != null && r.longitude != null)
+        ? `${r.latitude.toFixed(4)}, ${r.longitude.toFixed(4)}` : '—';
+    }
+    function media(r) {
+      if (!r.file_name) return '—';
+      return `<a class="medialink" href="/uploads/${r.file_name}" target="_blank">${r.file_original || 'file'}</a>`;
+    }
+    function metaCell(r) {
+      if (!r.media_metadata || r.media_metadata === '{}') return '<span style="color:var(--muted)">none</span>';
+      try {
+        const m = JSON.parse(r.media_metadata);
+        const keys = Object.keys(m).slice(0, 4).map(k => `${k}: ${m[k]}`).join('  ·  ');
+        return `<div class="metacell"><code>${keys || 'stored'}</code></div>`;
+      } catch { return 'stored'; }
+    }
+
+    async function load() {
+      const rows = await (await fetch('/api/reports')).json();
+      statEl.textContent = `${rows.length} report(s) · ${rows.filter(r => r.status === 'approved').length} approved · ${rows.filter(r => r.status === 'pending').length} pending`;
+      rowsEl.innerHTML = rows.map(r => `
+        <tr>
+          <td>${r.id}</td>
+          <td>${new Date(r.created_at).toLocaleString()}</td>
+          <td>${r.size || '—'}</td>
+          <td>${r.activity || '—'}</td>
+          <td>${r.location_text || '—'}</td>
+          <td>${r.unit || '—'}</td>
+          <td>${r.observed_at ? new Date(r.observed_at).toLocaleString() : '—'}</td>
+          <td>${r.equipment || '—'}</td>
+          <td>${coord(r)}</td>
+          <td>${r.location_source || '—'}</td>
+          <td>${media(r)}</td>
+          <td>${metaCell(r)}</td>
+          <td><span class="pill ${r.status}">${r.status}</span></td>
+          <td>
+            <div class="miniact">
+              <button onclick="setStatus(${r.id},'approved')">Approve</button>
+              <button onclick="setStatus(${r.id},'rejected')">Reject</button>
+            </div>
+          </td>
+        </tr>`).join('') || '<tr><td colspan="14" style="text-align:center;color:var(--muted)">No reports yet.</td></tr>';
+    }
+
+    async function setStatus(id, status) {
+      await fetch(`/api/reports/${id}/status`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status }),
+      });
+      load();
+    }
+    window.setStatus = setStatus;
+    load();
+  </script>
+</body>
+</html>

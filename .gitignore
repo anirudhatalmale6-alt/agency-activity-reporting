@@ -1,0 +1,10 @@
+node_modules/
+uploads/
+*.db
+*.db-wal
+*.db-shm
+*.log
+shot_*.png
+test_gps.jpg
+shot.py
+install.log

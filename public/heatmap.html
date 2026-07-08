@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Activity Heat Map</title>
+  <link rel="stylesheet" href="/styles.css" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <style>
+    #map { height: calc(100vh - 52px); width: 100%; }
+    .leaflet-container { background: #0b0f14; }
+    .legend {
+      position: absolute; bottom: 20px; left: 12px; z-index: 500;
+      background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+      padding: 10px 12px; font-size: 12.5px; color: var(--muted);
+    }
+    .legend b { color: var(--text); }
+    .grad { height: 8px; width: 140px; border-radius: 4px; margin: 6px 0;
+      background: linear-gradient(90deg,#2b6cff,#38c172,#ffb020,#ff5d5d); }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <span class="dot"></span>
+    <h1>Activity Heat Map</h1>
+    <nav>
+      <a href="/">Submit</a>
+      <a href="/admin.html">Admin</a>
+    </nav>
+  </header>
+  <div id="map"></div>
+  <div class="legend">
+    <b id="count">0 approved reports</b>
+    <div class="grad"></div>
+    <span>fewer</span> &nbsp;→&nbsp; <span>more concentrated</span>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js"></script>
+  <script>
+    const map = L.map('map').setView([40.7282, -73.9942], 11); // default: NYC
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+      attribution: '&copy; OpenStreetMap &copy; CARTO', maxZoom: 19,
+    }).addTo(map);
+
+    fetch('/api/heatmap.json').then(r => r.json()).then(points => {
+      document.getElementById('count').textContent = `${points.length} approved report(s)`;
+      if (!points.length) return;
+      const heat = points.map(p => [p.latitude, p.longitude, 0.8]);
+      L.heatLayer(heat, { radius: 28, blur: 20, maxZoom: 14,
+        gradient: { 0.2: '#2b6cff', 0.4: '#38c172', 0.7: '#ffb020', 1.0: '#ff5d5d' } }).addTo(map);
+      // Also drop light markers with detail popups.
+      points.forEach(p => {
+        L.circleMarker([p.latitude, p.longitude], { radius: 4, color: '#ffb020', weight: 1, fillOpacity: .6 })
+          .bindPopup(`<b>${p.activity || 'Activity'}</b><br>${p.unit || ''}<br><small>${p.observed_at || ''}</small>`)
+          .addTo(map);
+      });
+      map.fitBounds(points.map(p => [p.latitude, p.longitude]), { padding: [50, 50], maxZoom: 13 });
+    });
+  </script>
+</body>
+</html>

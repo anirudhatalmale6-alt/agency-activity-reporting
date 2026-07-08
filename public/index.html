@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Report Agency Activity</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <span class="dot"></span>
+    <h1>Community Activity Report</h1>
+    <nav>
+      <a href="/heatmap.html">Heat Map</a>
+      <a href="/admin.html">Admin</a>
+    </nav>
+  </header>
+
+  <main class="wrap">
+    <p class="intro">
+      Saw agency activity in your community? Report it below. Use the
+      <strong>SALUTE</strong> format &mdash; Size, Activity, Location, Unit, Time, Equipment.
+      Add a photo or video if it's safe to do so. Reports help keep the community informed.
+    </p>
+
+    <div id="msg" class="msg"></div>
+
+    <form id="reportForm" class="card">
+      <div class="field">
+        <label class="lbl">Size <span class="badge">S</span></label>
+        <p class="hint">Number of individuals, vehicles or assets observed (e.g. 5 agents, 2 vans).</p>
+        <input type="text" name="size" placeholder="e.g. 5 agents, 2 vans" />
+      </div>
+
+      <div class="field">
+        <label class="lbl">Activity <span class="badge">A</span></label>
+        <p class="hint">What are the observed individuals doing?</p>
+        <textarea name="activity" placeholder="Describe what you observed..."></textarea>
+      </div>
+
+      <div class="field">
+        <label class="lbl">Location <span class="badge">L</span> <span class="req">*</span></label>
+        <p class="hint">Precise address, intersection or landmark. In cities like NYC include borough &amp; street details.</p>
+        <input type="text" name="location_text" placeholder="e.g. Roosevelt Ave & 82nd St, Jackson Heights, Queens" required />
+        <div class="geo-row" style="margin-top:8px">
+          <button type="button" class="btn btn-ghost" id="geoBtn">Use my current location</button>
+          <span class="geo-status" id="geoStatus">Optional &mdash; helps place your report on the heat map.</span>
+        </div>
+        <input type="hidden" name="device_lat" id="device_lat" />
+        <input type="hidden" name="device_lng" id="device_lng" />
+      </div>
+
+      <div class="field">
+        <label class="lbl">Unit <span class="badge">U</span></label>
+        <p class="hint">Group or affiliation &mdash; visible patches, insignias or vehicle markings.</p>
+        <input type="text" name="unit" placeholder="e.g. markings, agency name, insignia" />
+      </div>
+
+      <div class="field">
+        <label class="lbl">Time <span class="badge">T</span></label>
+        <p class="hint">Exact date and time of the observation.</p>
+        <input type="datetime-local" name="observed_at" id="observed_at" />
+      </div>
+
+      <div class="field">
+        <label class="lbl">Equipment <span class="badge">E</span></label>
+        <p class="hint">Tools, weapons or vehicles observed. Tick all that apply.</p>
+        <div class="checks" id="equipmentChecks"></div>
+        <input type="text" name="equipment_other" placeholder="Other equipment (optional)" style="margin-top:8px" />
+      </div>
+    </form>
+
+    <div class="card">
+      <div class="field">
+        <label class="lbl">Photo / Video</label>
+        <p class="hint">Attach an image or video. Original metadata (including GPS &amp; timestamp) is preserved. Max 200MB.</p>
+        <div class="dropzone" id="dropzone">Tap to choose a photo or video, or take one now</div>
+        <input type="file" id="mediaInput" accept="image/*,video/*" capture="environment" hidden />
+        <div class="filepreview" id="filePreview"></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <label class="lbl">Terms &amp; Conditions <span class="req">*</span></label>
+      <div class="terms" id="termsBox">
+        <p>By submitting a report you confirm that the information provided is accurate to the best of your knowledge and observed by you personally. Do not put yourself at risk to gather information.</p>
+        <p>Submitted content, including uploaded media and its metadata, may be reviewed by administrators and, once approved, displayed in aggregated form (such as on a heat map). Do not include personal information about uninvolved individuals.</p>
+        <p>This platform is for community awareness only. You are responsible for complying with all applicable laws. Please scroll to the bottom to enable acceptance.</p>
+        <p style="color:var(--accent)">&mdash; End of terms &mdash;</p>
+      </div>
+      <label class="terms-accept disabled" id="termsAcceptLabel">
+        <input type="checkbox" id="termsCheck" disabled />
+        <span>I have read and accept the terms and conditions.</span>
+      </label>
+    </div>
+
+    <button type="submit" form="reportForm" class="btn btn-primary" id="submitBtn" disabled>
+      Submit Report
+    </button>
+  </main>
+
+  <script src="/app.js"></script>
+</body>
+</html>
