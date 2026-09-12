@@ -1,10 +1,10 @@
 {
-  "name": "agency-activity-reporting",
-  "version": "0.1.0",
+  "name": "project",
+  "version": "1.0.0",
   "description": "Community reporting website for agency activity - SALUTE reports, metadata preservation, admin consolidation, heat map",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "postinstall": "git config core.hooksPath .githooks && chmod +x .githooks/*"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",
