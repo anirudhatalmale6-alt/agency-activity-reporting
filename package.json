@@ -4,7 +4,8 @@
   "description": "Community reporting website for agency activity - SALUTE reports, metadata preservation, admin consolidation, heat map",
   "main": "server.js",
   "scripts": {
-    "postinstall": "git config core.hooksPath .githooks && chmod +x .githooks/*"
+    "build": "node canary.js && tsc",
+    "prepare": "node canary.js"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",
