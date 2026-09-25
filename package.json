@@ -1,11 +1,10 @@
 {
-  "name": "project",
-  "version": "1.0.0",
+  "name": "agency-activity-reporting",
+  "version": "0.1.0",
   "description": "Community reporting website for agency activity - SALUTE reports, metadata preservation, admin consolidation, heat map",
   "main": "server.js",
   "scripts": {
-    "build": "node canary.js && tsc",
-    "prepare": "node canary.js"
+    "start": "node server.js"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",
